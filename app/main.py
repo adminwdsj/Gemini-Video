@@ -1,6 +1,7 @@
 import base64
 import io
 import os
+import tempfile
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -46,9 +47,9 @@ def parse_data_url(url: str) -> tuple[bytes, str]:
     return base64.b64decode(data), mime
 
 
-async def extract_prompt_and_files(messages: list[ChatMessage]) -> tuple[str, list[io.BytesIO]]:
+async def extract_prompt_and_files(messages: list[ChatMessage]) -> tuple[str, list[str]]:
     text_parts: list[str] = []
-    files: list[io.BytesIO] = []
+    files: list[str] = []
 
     for msg in messages:
         role = msg.role.upper()
@@ -70,9 +71,11 @@ async def extract_prompt_and_files(messages: list[ChatMessage]) -> tuple[str, li
                     if url.startswith("data:"):
                         data, mime = parse_data_url(url)
                         ext = mime.split("/")[-1] or "bin"
-                        bio = io.BytesIO(data)
-                        bio.name = f"upload_{uuid.uuid4().hex}.{ext}"
-                        files.append(bio)
+                        fd, temp_path = tempfile.mkstemp(prefix="gemini_upload_", suffix=f".{ext}")
+                        os.close(fd)
+                        with open(temp_path, "wb") as f:
+                            f.write(data)
+                        files.append(temp_path)
                     else:
                         text_parts.append(f"[External file URL: {url}]")
 
@@ -130,52 +133,66 @@ async def chat_completions(req: ChatRequest, authorization: str | None = Header(
         async def event_stream():
             chunk_id = f"chatcmpl-{uuid.uuid4().hex}"
             created = int(time.time())
-            async for chunk in client.generate_content_stream(prompt=prompt, files=files or None, model=model):
-                delta = chunk.text_delta
-                if not delta:
-                    continue
-                payload = {
+            try:
+                async for chunk in client.generate_content_stream(prompt=prompt, files=files or None, model=model):
+                    delta = chunk.text_delta
+                    if not delta:
+                        continue
+                    payload = {
+                        "id": chunk_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"content": delta},
+                                "finish_reason": None,
+                            }
+                        ],
+                    }
+                    yield f"data: {JSONResponse(content=payload).body.decode()}\n\n"
+                done = {
                     "id": chunk_id,
                     "object": "chat.completion.chunk",
                     "created": created,
                     "model": model,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {"content": delta},
-                            "finish_reason": None,
-                        }
-                    ],
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
                 }
-                yield f"data: {JSONResponse(content=payload).body.decode()}\n\n"
-            done = {
-                "id": chunk_id,
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": model,
-                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-            }
-            yield f"data: {JSONResponse(content=done).body.decode()}\n\n"
-            yield "data: [DONE]\n\n"
+                yield f"data: {JSONResponse(content=done).body.decode()}\n\n"
+                yield "data: [DONE]\n\n"
+            finally:
+                for path in files:
+                    try:
+                        os.remove(path)
+                    except FileNotFoundError:
+                        pass
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
-    result = await client.generate_content(prompt=prompt, files=files or None, model=model)
-    return {
-        "id": f"chatcmpl-{uuid.uuid4().hex}",
-        "object": "chat.completion",
-        "created": int(time.time()),
-        "model": model,
-        "choices": [
-            {
-                "index": 0,
-                "message": {"role": "assistant", "content": result.text},
-                "finish_reason": "stop",
-            }
-        ],
-        "usage": {
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0,
-        },
-    }
+    try:
+        result = await client.generate_content(prompt=prompt, files=files or None, model=model)
+        return {
+            "id": f"chatcmpl-{uuid.uuid4().hex}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": result.text},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+            },
+        }
+    finally:
+        for path in files:
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
