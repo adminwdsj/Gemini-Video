@@ -1,4 +1,4 @@
 fastapi==0.115.12
 uvicorn[standard]==0.34.2
 python-multipart==0.0.20
-gemini-webapi==1.16.1
+gemini-webapi==2.0.0
