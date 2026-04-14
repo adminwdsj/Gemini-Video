@@ -14,6 +14,7 @@ from gemini_webapi import GeminiClient
 
 API_KEY = os.getenv("API_KEY", "")
 DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "gemini-3-flash-preview")
+GATEWAY_VERSION = "2026-04-14b"
 GEMINI_1PSID = os.getenv("GEMINI_1PSID", "")
 GEMINI_1PSIDTS = os.getenv("GEMINI_1PSIDTS", "")
 
@@ -95,7 +96,7 @@ app = FastAPI(lifespan=lifespan)
 
 @app.get("/healthz")
 async def healthz():
-    return {"status": "ok"}
+    return {"status": "ok", "version": GATEWAY_VERSION}
 
 
 @app.get("/v1/models")
