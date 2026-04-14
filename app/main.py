@@ -135,7 +135,7 @@ async def chat_completions(req: ChatRequest, authorization: str | None = Header(
             chunk_id = f"chatcmpl-{uuid.uuid4().hex}"
             created = int(time.time())
             try:
-                async for chunk in client.generate_content_stream(prompt=prompt, files=files or None, model=model):
+                async for chunk in client.generate_content_stream(prompt=prompt, files=files or None, model=model, temporary=True):
                     delta = chunk.text_delta
                     if not delta:
                         continue
@@ -172,7 +172,7 @@ async def chat_completions(req: ChatRequest, authorization: str | None = Header(
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
     try:
-        result = await client.generate_content(prompt=prompt, files=files or None, model=model)
+        result = await client.generate_content(prompt=prompt, files=files or None, model=model, temporary=True)
         return {
             "id": f"chatcmpl-{uuid.uuid4().hex}",
             "object": "chat.completion",
